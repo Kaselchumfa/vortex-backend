@@ -49,7 +49,15 @@ export interface JobContext {
   attempt: number;
 }
 
-export type JobHandler<TData> = (data: TData, ctx: JobContext) => Promise<void>;
+/**
+ * Job handler. The resolved value is captured as the job's result and can be
+ * retrieved later via {@link JobQueueDriver.getResult}. Handlers that return
+ * nothing (`void`) remain fully supported.
+ */
+export type JobHandler<TData, TResult = void> = (
+  data: TData,
+  ctx: JobContext,
+) => Promise<TResult>;
 
 /** Snapshot of one queue for metrics and the admin API. */
 export interface QueueStats {
@@ -68,6 +76,28 @@ export interface DeadLetter {
   error: string;
   attempts: number;
   failedAt: string;
+  /** Queue the job originally ran on (source queue for a retry). */
+  queue: string;
+  /**
+   * Enough of the original {@link JobDefinition} to reconstruct it when
+   * retrying the job (attempts / backoff are re-applied from here).
+   */
+  def: Pick<JobDefinition, "name" | "queue" | "attempts" | "backoffMs">;
+}
+
+/** Outcome of a job-status lookup. */
+export interface JobResult {
+  status: "pending" | "active" | "completed" | "failed";
+  /** Resolved handler value, present when `status === "completed"`. */
+  result?: unknown;
+  /** Failure reason, present when `status === "failed"`. */
+  error?: string;
+}
+
+/** A repeating job schedule registered via {@link JobQueueDriver.schedule}. */
+export interface JobSchedule {
+  name: string;
+  everyMs: number;
 }
 
 /** Hooks the service installs on a driver to emit per-job metrics. */
@@ -86,6 +116,32 @@ export interface JobQueueDriver {
   process<T>(def: JobDefinition<T>, handler: JobHandler<T>, events: JobEvents): void;
   stats(queue: string): Promise<QueueStats>;
   deadLetters(queue: string, limit?: number): Promise<DeadLetter[]>;
+  /**
+   * Re-enqueues a dead-lettered job for another attempt, resetting its attempt
+   * counter so it gets the full {@link JobDefinition.attempts} budget again.
+   * Removes the record from the dead-letter queue on success.
+   *
+   * @returns `true` if the job was found and re-enqueued, `false` if no
+   *   dead-letter record with `jobId` exists on `queue`.
+   */
+  retryDeadLetter(queue: string, jobId: string): Promise<boolean>;
+  /**
+   * Looks up the status (and result/error) of a job by id.
+   *
+   * @returns the job's {@link JobResult}, or `{ status: "failed" }` with a
+   *   "not found" error when the id was never enqueued on `queue` or has aged
+   *   out of the retention window. Never throws for unknown ids.
+   */
+  getResult(queue: string, jobId: string): Promise<JobResult>;
+  /** Lists the repeating schedules currently registered on `queue`. */
+  listSchedules(queue: string): Promise<JobSchedule[]>;
+  /**
+   * Cancels a repeating schedule by name. Jobs already enqueued from previous
+   * ticks are unaffected.
+   *
+   * @returns `true` if a schedule was removed, `false` if none matched `name`.
+   */
+  unschedule(queue: string, name: string): Promise<boolean>;
   /**
    * Stops pulling new jobs and waits up to `timeoutMs` for in-flight ones.
    * Jobs still running at the deadline are returned to the queue.

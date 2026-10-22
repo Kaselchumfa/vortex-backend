@@ -15,6 +15,8 @@ import {
   JobEvents,
   JobHandler,
   JobQueueDriver,
+  JobResult,
+  JobSchedule,
   QueueSettings,
   QueueStats,
 } from "./jobs.types";
@@ -89,6 +91,29 @@ export class JobsService implements OnApplicationShutdown {
 
   deadLetters(queue: string, limit?: number): Promise<DeadLetter[]> {
     return this.driver.deadLetters(queue, limit);
+  }
+
+  /**
+   * Re-enqueues a dead-lettered job for another attempt (issue #693).
+   * Returns false when no dead-letter record matches `jobId`.
+   */
+  retryDeadLetter(queue: string, jobId: string): Promise<boolean> {
+    return this.driver.retryDeadLetter(queue, jobId);
+  }
+
+  /** Looks up the status/result of a previously enqueued job (issue #694). */
+  getResult(queue: string, jobId: string): Promise<JobResult> {
+    return this.driver.getResult(queue, jobId);
+  }
+
+  /** Lists the repeating schedules registered on `queue` (issue #695). */
+  listSchedules(queue: string): Promise<JobSchedule[]> {
+    return this.driver.listSchedules(queue);
+  }
+
+  /** Cancels a repeating schedule; false when no such schedule exists (issue #695). */
+  unschedule(queue: string, name: string): Promise<boolean> {
+    return this.driver.unschedule(queue, name);
   }
 
   queues(): string[] {
